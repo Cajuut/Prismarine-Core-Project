@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prismarine</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <div class="titlebar">
+        <div class="titlebar-title" data-tauri-drag-region>
+            <img src="app-icon.png" alt="icon" class="titlebar-icon" style="pointer-events: none;" />
+            <span style="pointer-events: none;">Prismarine</span>
+        </div>
+        <div class="titlebar-status">
+            <div class="status-item">
+                <span class="status-label">CPU:</span>
+                <span id="cpu-usage" class="status-value">0%</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Memory:</span>
+                <span id="memory-usage" class="status-value">0 MB</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">外部IP:</span>
+                <span id="external-ip" class="status-value">取得中...</span>
+                <button id="toggle-ip-btn" class="action-btn-small" title="IP表示/非表示">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                        id="eye-icon">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div class="titlebar-controls">
+            <div class="titlebar-button" id="titlebar-minimize">
+                <svg width="10" height="1" viewBox="0 0 10 1">
+                    <path d="M0 0h10v1H0z" />
+                </svg>
+            </div>
+            <div class="titlebar-button" id="titlebar-maximize">
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <path d="M1 1h8v8H1V1zm1 1v6h6V2H2z" />
+                </svg>
+            </div>
+            <div class="titlebar-button close" id="titlebar-close">
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <path
+                        d="M1.5 0.5L0.5 1.5L4 5L0.5 8.5L1.5 9.5L5 6L8.5 9.5L9.5 8.5L6 5L9.5 1.5L8.5 0.5L5 4L1.5 0.5Z" />
+                </svg>
+            </div>
+        </div>
+    </div>
+    <div class="app-container">
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <nav class="nav-menu">
+                    <button class="nav-item active" data-view="dashboard">
+                        <span class="nav-icon"><img src="dashboard-icon.png" alt="Dashboard"
+                                class="nav-icon-img"></span>
+                        <span>ダッシュボード</span>
+                    </button>
+                    <button class="nav-item" data-view="servers">
+                        <span class="nav-icon"><img src="server-icon.png" alt="Servers" class="nav-icon-img"></span>
+                        <span>サーバー管理</span>
+                    </button>
+                    <button class="nav-item" data-view="ports">
+                        <span class="nav-icon"><img src="port-icon.png" alt="Ports" class="nav-icon-img"></span>
+                        <span>ポート設定</span>
+                    </button>
+                    <button class="nav-item" data-view="bridge">
+                        <span class="nav-icon"><img src="bridge-icon.png" alt="Bridge" class="nav-icon-img"></span>
+                        <span>Bridge接続</span>
+                    </button>
+                    <button class="nav-item" data-view="settings">
+                        <span class="nav-icon"><img src="settings-icon.png" alt="Settings" class="nav-icon-img"></span>
+                        <span>設定</span>
+                    </button>
+                </nav>
+
+                <div class="sidebar-footer">
+                    <div class="upnp-status">
+                        <span id="upnp-indicator" class="status-indicator"></span>
+                        <span id="upnp-text">UPnP確認中...</span>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Content Area -->
+            <main class="content-area">
+                <!-- Dashboard View -->
+                <section id="dashboard-view" class="view active">
+                    <h2 class="view-title">ダッシュボード</h2>
+
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div class="stat-icon">S</div>
+                                <h3>サーバー数</h3>
+                            </div>
+                            <div class="stat-value" id="total-servers">0</div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div class="stat-icon">►</div>
+                                <h3>実行中</h3>
+                            </div>
+                            <div class="stat-value" id="running-servers">0</div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div class="stat-icon">M</div>
+                                <h3>メモリ使用率</h3>
+                            </div>
+                            <div class="stat-value" id="memory-percent">0%</div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div class="stat-icon">C</div>
+                                <h3>CPU使用率</h3>
+                            </div>
+                            <div class="stat-value" id="cpu-percent">0%</div>
+                        </div>
+                    </div>
+
+                    <div class="recent-servers">
+                        <h3>最近のサーバー</h3>
+                        <div id="recent-servers-list" class="server-list"></div>
+                    </div>
+                </section>
+
+                <!-- Servers View -->
+                <section id="servers-view" class="view">
+                    <div class="view-header">
+                        <h2 class="view-title">サーバー管理</h2>
+                        <button id="create-server-btn" class="btn btn-primary">
+                            + 新規サーバー作成
+                        </button>
+                    </div>
+
+                    <div id="servers-list" class="servers-grid"></div>
+                </section>
+
+                <!-- Ports View -->
+                <section id="ports-view" class="view">
+                    <h2 class="view-title">ポート設定</h2>
+
+                    <div class="managed-ports-header">
+                        <h3>開放ポート一覧 <span id="port-count" class="badge">0/5</span></h3>
+                    </div>
+
+                    <div id="managed-ports-list" class="managed-ports-list">
+                        <!-- Port Items will be injected here via JS (5 slots) -->
+                    </div>
+
+                    <!-- Port Creation Modal -->
+                    <div id="port-modal" class="modal hidden">
+                        <div class="modal-content glass-panel">
+                            <h3 class="modal-title">ポート開放設定</h3>
+
+                            <div class="form-group">
+                                <label>管理名</label>
+                                <input type="text" id="port-name-input" class="input" placeholder="例: サバイバルサーバー"
+                                    maxlength="20">
+                            </div>
+
+                            <div class="form-group">
+                                <label>ポート番号</label>
+                                <input type="number" id="port-number-input" class="input" value="25565" min="1"
+                                    max="65535">
+                            </div>
+
+                            <div class="form-group">
+                                <label>プロトコル</label>
+                                <div class="radio-group">
+                                    <label class="radio-label">
+                                        <input type="radio" name="protocol" value="TCP" checked>
+                                        <span>TCP (標準)</span>
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="protocol" value="UDP">
+                                        <span>UDP (BEなど)</span>
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="protocol" value="BOTH">
+                                        <span>TCP+UDP</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="modal-actions">
+                                <button id="cancel-port-btn" class="btn btn-ghost">キャンセル</button>
+                                <button id="submit-port-btn" class="btn btn-primary">開放する</button>
+                            </div>
+                        </div>
+                        <!-- Removed premature closing div -->
+                </section>
+
+                <!-- Bridge View -->
+                <section id="bridge-view" class="view">
+                    <h2 class="view-title">Prismarine Bridge</h2>
+
+                    <div class="bridge-section">
+                        <p class="bridge-description">ルーター設定なしで世界中からサーバーに接続できます（登録不要！）</p>
+
+                        <div class="bridge-controls">
+                            <button id="start-bridge-btn" class="btn btn-primary">Bridgeを開始</button>
+                            <button id="stop-bridge-btn" class="btn btn-secondary" disabled>Bridgeを停止</button>
+                        </div>
+
+                        <div id="bridge-status" class="info-box bridge-status">
+                            <span class="status-label">ステータス:</span>
+                            <span id="bridge-status-text">停止中</span>
+                        </div>
+
+                        <div id="bridge-address" class="bridge-address" style="display: none;">
+                            <span class="address-label">接続アドレス:</span>
+                            <code id="bridge-address-text"></code>
+                            <button id="copy-bridge-address" class="btn btn-small">コピー</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Settings View -->
+                <section id="settings-view" class="view">
+                    <h2 class="view-title">設定</h2>
+
+                    <div class="settings-group">
+                        <h3>一般設定</h3>
+                        <div class="setting-item">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="auto-port-forwarding" checked />
+                                <span>サーバー起動時に自動的にポート転送を設定</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-group">
+                        <h3>アプリケーション情報</h3>
+                        <p class="info-text">Minecraft Server Manager v0.1.0</p>
+                        <p class="info-text">Powered by Tauri + Rust</p>
+                    </div>
+                </section>
+
+                <!-- Server Detail View -->
+                <section id="server-detail-view" class="view">
+                    <div class="detail-header">
+                        <button id="back-to-servers-btn" class="btn btn-secondary">
+                            ← サーバー一覧に戻る
+                        </button>
+                        <div class="detail-title-section">
+                            <h2 class="view-title" id="detail-server-name">サーバー名</h2>
+                            <span class="server-status" id="detail-server-status">Stopped</span>
+                        </div>
+                        <div class="detail-actions">
+                            <button id="detail-start-btn" class="btn btn-primary" style="display: none;">起動</button>
+                            <button id="detail-restart-btn" class="btn btn-warning" style="display: none;">再起動</button>
+                            <button id="detail-stop-btn" class="btn btn-danger" style="display: none;">停止</button>
+                            <button id="detail-folder-btn" class="btn btn-secondary">📁 フォルダを開く</button>
+                            <button id="detail-delete-btn" class="btn btn-secondary">削除</button>
+                        </div>
+                    </div>
+
+                    <div class="detail-content">
+                        <div class="detail-main">
+                            <div class="detail-tabs">
+                                <button class="detail-tab-btn active" data-target="logs">ログ (Console)</button>
+                                <button class="detail-tab-btn" data-target="players">プレイヤー</button>
+                                <button class="detail-tab-btn" data-target="plugins">プラグインストア</button>
+                                <button class="detail-tab-btn" data-target="settings">設定</button>
+                            </div>
+
+                            <div id="tab-content-logs" class="detail-tab-content active">
+                                <div class="detail-logs-section">
+                                    <div class="logs-header">
+                                        <h3>サーバーログ（リアルタイム）</h3>
+                                        <div class="logs-header-actions">
+                                            <button id="detail-copy-logs-btn"
+                                                class="btn btn-secondary btn-sm">コピー</button>
+                                            <button id="detail-clear-logs-btn"
+                                                class="btn btn-secondary btn-sm">クリア</button>
+                                        </div>
+                                    </div>
+                                    <div class="detail-logs-viewer" id="detail-logs-content">
+                                        <div class="logs-loading">ログを読み込み中...</div>
+                                    </div>
+                                    <div class="console-input-section">
+                                        <div class="console-input-wrapper">
+                                            <span class="console-prompt">></span>
+                                            <input type="text" id="console-command-input" class="console-input"
+                                                placeholder="コマンドを入力 (例: op PlayerName, gamemode creative @a, stop)"
+                                                autocomplete="off" />
+                                            <button id="send-command-btn" class="btn btn-primary btn-sm">送信</button>
+                                        </div>
+                                        <div class="console-hint">
+                                            💡 ヒント: /op でOP付与、/gamemode でゲームモード変更、/stop でサーバー停止
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="tab-content-plugins" class="detail-tab-content hidden">
+                                <div class="plugin-store-container">
+                                    <div class="plugin-store-header">
+                                        <!-- Starter Pack Banner -->
+                                        <div class="starter-pack-banner">
+                                            <div class="starter-pack-info">
+                                                <div class="starter-pack-title">👑 定番プラグインセット</div>
+                                                <div class="starter-pack-desc">LuckPerms, EssentialsX, WorldEdit, Vault,
+                                                    CoreProtect, QuickShop-Hikari を一括導入</div>
+                                            </div>
+                                            <button id="install-starter-pack-btn" class="btn btn-accent btn-sm">
+                                                まとめてインストール
+                                            </button>
+                                        </div>
+
+                                        <div class="plugin-search-row">
+                                            <select id="plugin-source-select" class="input input-sm"
+                                                style="width: 120px;">
+                                                <option value="Modrinth">Modrinth</option>
+                                                <option value="Spigot">Spigot</option>
+                                            </select>
+                                            <input type="text" id="plugin-search-input" class="input input-sm"
+                                                style="flex: 1;" placeholder="プラグインを検索... (例: WorldEdit, Essentials)"
+                                                autocomplete="off">
+                                            <button id="plugin-search-btn" class="btn btn-primary btn-sm">検索</button>
+                                        </div>
+                                    </div>
+                                    <div id="plugin-search-results" class="plugin-list">
+                                        <!-- Results injected here -->
+                                        <div class="plugin-list-empty">
+                                            検索キーワードを入力してプラグインを探してください。
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="tab-content-players" class="detail-tab-content hidden">
+                                <div class="detail-card">
+                                    <h3>オンラインプレイヤー</h3>
+                                    <div class="players-list" id="detail-players-list">
+                                        <div class="empty-state">オフラインまたはプレイヤーはいません</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="tab-content-settings" class="detail-tab-content hidden">
+                                <div class="detail-card">
+                                    <h3>自動再起動設定</h3>
+                                    <div class="form-group">
+                                        <div class="checkbox-wrapper-35">
+                                            <input value="private" name="switch" id="detail-auto-restart-toggle"
+                                                type="checkbox" class="switch">
+                                            <label for="detail-auto-restart-toggle"></label>
+                                            <span style="margin-left: 10px;">自動再起動を有効にする</span>
+                                        </div>
+                                    </div>
+                                    <div class="form-group" style="margin-top: 15px;">
+                                        <label>再起動間隔 (時間)</label>
+                                        <div style="display: flex; gap: 8px;">
+                                            <input type="number" id="detail-restart-interval-input"
+                                                class="input input-sm" style="flex: 1;" value="24" min="1">
+                                            <button id="detail-save-auto-restart-btn"
+                                                class="btn btn-primary btn-sm">保存</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="detail-sidebar">
+                            <div class="detail-info-card">
+                                <h3>サーバー情報</h3>
+                                <div class="info-grid">
+                                    <div class="info-item full-width" style="margin-bottom: 12px;">
+                                        <span class="info-label">説明 (MOTD):</span>
+                                        <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
+                                            <input type="text" id="detail-server-motd-input" class="input input-sm"
+                                                style="flex: 1;" placeholder="Minecraft Server" autocomplete="off">
+                                            <button id="save-motd-btn" class="btn btn-secondary btn-sm">保存</button>
+                                        </div>
+                                    </div>
+                                    <div class="info-item full-width" style="margin-bottom: 12px;">
+                                        <span class="info-label">最大人数:</span>
+                                        <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
+                                            <button id="decrease-players-btn" class="stepper-btn">-</button>
+                                            <input type="number" id="detail-server-max-players-input"
+                                                class="input input-sm" style="flex: 1; text-align: center;"
+                                                placeholder="20" min="1" autocomplete="off">
+                                            <button id="increase-players-btn" class="stepper-btn">+</button>
+                                            <button id="save-max-players-btn" class="btn btn-secondary btn-sm"
+                                                style="margin-left: 4px;">保存</button>
+                                        </div>
+                                    </div>
+                                    <div class="info-item">
+                                        <span class="info-label">タイプ:</span>
+                                        <span class="info-value" id="detail-server-type">-</span>
+                                    </div>
+                                    <div class="info-item">
+                                        <span class="info-label">バージョン:</span>
+                                        <span class="info-value" id="detail-server-version">-</span>
+                                    </div>
+                                    <div class="info-item">
+                                        <span class="info-label">ポート:</span>
+                                        <span class="info-value" id="detail-server-port">-</span>
+                                    </div>
+                                    <div class="info-item">
+                                        <span class="info-label">メモリ:</span>
+                                        <span class="info-value" id="detail-server-memory">-</span>
+                                    </div>
+                                    <div class="info-item full-width" style="margin-top: 8px;">
+                                        <button id="open-plugins-btn" class="btn btn-secondary btn-sm btn-full">
+                                            📁 プラグインフォルダを開く
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-info-card">
+                                <h3>統計情報</h3>
+                                <div class="info-grid">
+                                    <div class="info-item">
+                                        <span class="info-label">プレイヤー:</span>
+                                        <span class="info-value" id="detail-players">0/20</span>
+                                    </div>
+                                    <div class="info-item">
+                                        <span class="info-label">稼働時間:</span>
+                                        <span class="info-value" id="detail-uptime">-</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-info-card">
+                                <h3>クロスプラットフォーム</h3>
+                                <p class="info-text text-sm">統合版 (Switch/スマホ) からの参加を許可します。</p>
+                                <p class="info-text text-xs text-muted">※ ViaVersionが必要になる場合があります。</p>
+                                <div id="geyser-status-area" style="margin-top: 10px;">
+                                    <button id="install-geyser-btn" class="btn btn-secondary btn-full">
+                                        🔄 クロスプレイを有効化
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="detail-info-card">
+                                <h3>バージョン互換性 (ViaVersion)</h3>
+                                <p class="info-text text-sm">新しいバージョンのクライアントでの参加を許可します。</p>
+                                <div id="viaversion-status-area" style="margin-top: 10px;">
+                                    <button id="install-viaversion-btn" class="btn btn-secondary btn-full">
+                                        🔄 互換性を有効化
+                                    </button>
+                                </div>
+                            </div>
+                        </div> <!-- End detail-sidebar -->
+                    </div> <!-- End detail-content -->
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <!-- Create Server Modal -->
+    <div id="create-server-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>新規サーバー作成</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="server-name">サーバー名</label>
+                    <input type="text" id="server-name" class="input" placeholder="My Server" autocomplete="off" />
+                </div>
+
+                <div class="form-group">
+                    <label>サーバータイプ</label>
+                    <div class="custom-select-wrapper" id="wrapper-server-type">
+                        <div class="custom-select">
+                            <div class="custom-select-trigger">
+                                <span>Paper</span>
+                                <div class="arrow"></div>
+                            </div>
+                            <div class="custom-options">
+                                <span class="custom-option" data-value="vanilla">Vanilla</span>
+                                <span class="custom-option selected" data-value="paper">Paper</span>
+                                <span class="custom-option disabled" data-value="spigot">Spigot (Coming Soon)</span>
+                                <span class="custom-option disabled" data-value="forge">Forge (Coming Soon)</span>
+                            </div>
+                        </div>
+                        <input type="hidden" id="server-type" value="paper">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>バージョン</label>
+                    <div class="custom-select-wrapper" id="wrapper-server-version">
+                        <div class="custom-select disabled">
+                            <div class="custom-select-trigger">
+                                <span class="placeholder">読み込み中...</span>
+                                <div class="arrow"></div>
+                            </div>
+                            <div class="custom-options">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+                        <input type="hidden" id="server-version-select" value="">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="server-port">ポート</label>
+                    <input type="number" id="server-port" class="input" placeholder="25565" value="25565" min="1"
+                        max="65535" autocomplete="off" />
+                </div>
+
+                <div class="form-group">
+                    <label for="server-memory">最大メモリ</label>
+                    <input type="text" id="server-memory" class="input" placeholder="2G" value="2G"
+                        autocomplete="off" />
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-create-btn" class="btn btn-secondary">キャンセル</button>
+                <button id="confirm-create-btn" class="btn btn-primary">作成</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Confirmation Modal -->
+    <div id="confirm-modal" class="confirm-modal">
+        <div class="confirm-modal-backdrop"></div>
+        <div class="confirm-modal-content">
+            <div class="confirm-modal-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18"></path>
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+            </div>
+            <h3 class="confirm-modal-title">削除の確認</h3>
+            <p class="confirm-modal-message" id="confirm-modal-message">このアイテムを削除しますか？</p>
+            <div class="confirm-modal-actions">
+                <button id="confirm-modal-cancel" class="btn btn-ghost">キャンセル</button>
+                <button id="confirm-modal-ok" class="btn btn-danger">削除する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EULA Confirmation Modal -->
+    <div id="eula-modal" class="eula-modal">
+        <div class="eula-modal-backdrop"></div>
+        <div class="eula-modal-content">
+            <div class="eula-modal-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+            </div>
+            <h3 class="eula-modal-title">Minecraft EULA</h3>
+            <p class="eula-modal-message">
+                Minecraft サーバーを起動するには、Mojang の<br>
+                <a href="https://aka.ms/MinecraftEULA" target="_blank" class="eula-link">エンドユーザーライセンス規約 (EULA)</a><br>
+                に同意する必要があります。
+            </p>
+            <div class="eula-modal-actions">
+                <button id="eula-modal-cancel" class="btn btn-ghost">キャンセル</button>
+                <button id="eula-modal-ok" class="btn btn-primary-gradient">同意する</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+
+</html>
