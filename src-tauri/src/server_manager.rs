@@ -2,10 +2,13 @@ use crate::java_manager::JavaManager;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::fs;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -79,6 +82,7 @@ pub enum ServerType {
     Forge,
     Mohist,
     Banner,
+    Purpur,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,6 +142,7 @@ impl ServerManager {
 
     pub async fn create_server(
         &self,
+        app_handle: Option<tauri::AppHandle>,
         name: String,
         version: String,
         server_type: ServerType,
@@ -160,8 +165,15 @@ impl ServerManager {
             .await
             .context("Failed to create server directory")?;
 
+        if let Some(h) = &app_handle {
+            let _ = h.emit(
+                "build-log",
+                format!("Creating server directory: {:?}", server_path),
+            );
+        }
+
         // Download server JAR
-        self.download_server_jar(&server_path, &server_type, &version)
+        self.download_server_jar(app_handle, &server_path, &server_type, &version)
             .await?;
 
         // Create default server.properties
@@ -388,11 +400,19 @@ impl ServerManager {
 
     async fn download_server_jar(
         &self,
+        app_handle: Option<tauri::AppHandle>,
         server_path: &Path,
         server_type: &ServerType,
         version: &str,
     ) -> Result<()> {
         let jar_path = server_path.join("server.jar");
+
+        if let Some(h) = &app_handle {
+            let _ = h.emit(
+                "build-log",
+                format!("Fetching download URL for {:?} {}...", server_type, version),
+            );
+        }
 
         let url = match server_type {
             ServerType::Vanilla => self.get_vanilla_url(version).await?,
@@ -400,13 +420,21 @@ impl ServerManager {
             ServerType::Forge => self.get_forge_url(version).await?,
             ServerType::Mohist => self.get_mohist_url(version).await?,
             ServerType::Banner => self.get_banner_url(version).await?,
-            ServerType::Spigot => {
-                return Err(anyhow::anyhow!(
-                "Spigot is not supported due to licensing restrictions. Please use Paper instead."
-            ))
-            }
+            ServerType::Spigot => "build_tools".to_string(),
+            ServerType::Purpur => self.get_purpur_url(version).await?,
         };
 
+        if server_type == &ServerType::Spigot {
+            println!("Starting Spigot build process via BuildTools...");
+            // Spigot requires special handling to build from source
+            return self
+                .build_spigot_server(app_handle, server_path, version)
+                .await;
+        }
+
+        if let Some(h) = &app_handle {
+            let _ = h.emit("build-log", format!("Downloading server JAR from: {}", url));
+        }
         println!("Downloading server JAR from: {}", url);
         // Use client with UA and redirect following
         let client = reqwest::Client::builder()
@@ -456,22 +484,73 @@ impl ServerManager {
             let installer_path = server_path.join("forge-installer.jar");
             fs::write(&installer_path, &content).await?;
 
+            if let Some(h) = &app_handle {
+                let _ = h.emit(
+                    "build-log",
+                    "Forge installer downloaded. Running installer...",
+                );
+            }
+
             // Get Java executable for running installer
             let required_java = crate::java_manager::JavaManager::get_java_version_for_mc(version);
             let java_path = self.java_manager.get_java_executable(required_java).await?;
 
             println!("Running Forge installer...");
 
-            // Run: java -jar forge-installer.jar --installServer
-            let output = std::process::Command::new(&java_path)
+            let mut command = tokio::process::Command::new(&java_path);
+            command
                 .args(&["-jar", "forge-installer.jar", "--installServer"])
                 .current_dir(server_path)
-                .output()
-                .context("Failed to run Forge installer")?;
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .env_remove("M2_HOME")
+                .env_remove("MAVEN_HOME")
+                .env_remove("MVN_HOME");
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow::anyhow!("Forge installer failed: {}", stderr));
+            let mut child = command.spawn()?;
+
+            let stdout = child.stdout.take().context("Failed to open stdout")?;
+            let stderr = child.stderr.take().context("Failed to open stderr")?;
+
+            let mut stdout_reader = tokio::io::BufReader::new(stdout).lines();
+            let mut stderr_reader = tokio::io::BufReader::new(stderr).lines();
+
+            if let Some(handle) = app_handle.clone() {
+                let handle_out = handle.clone();
+                tokio::spawn(async move {
+                    while let Ok(Some(line)) = stdout_reader.next_line().await {
+                        println!("[Forge] {}", line);
+                        let _ = handle_out.emit("build-log", line);
+                    }
+                });
+                let handle_err = handle.clone();
+                tokio::spawn(async move {
+                    while let Ok(Some(line)) = stderr_reader.next_line().await {
+                        println!("[Forge ERR] {}", line);
+                        let _ = handle_err.emit("build-log", format!("ERROR: {}", line));
+                    }
+                });
+            } else {
+                // Fallback logging without emit
+                tokio::spawn(async move {
+                    while let Ok(Some(line)) = stdout_reader.next_line().await {
+                        println!("[Forge] {}", line);
+                    }
+                });
+                tokio::spawn(async move {
+                    while let Ok(Some(line)) = stderr_reader.next_line().await {
+                        println!("[Forge ERR] {}", line);
+                    }
+                });
+            }
+
+            let status = child.wait().await?;
+
+            if !status.success() {
+                return Err(anyhow::anyhow!(
+                    "Forge installer failed with status: {}",
+                    status
+                ));
             }
 
             // Find the generated server jar (it's usually named like forge-*-server.jar or just run.sh)
@@ -585,6 +664,23 @@ impl ServerManager {
         Ok(format!(
             "https://api.papermc.io/v2/projects/paper/versions/{}/builds/{}/downloads/{}",
             version, build_number, file_name
+        ))
+    }
+
+    async fn get_purpur_url(&self, version: &str) -> Result<String> {
+        let url = format!("https://api.purpurmc.org/v2/purpur/{}", version);
+        let client = reqwest::Client::builder()
+            .user_agent("MinecraftServerManager/0.1.0")
+            .build()?;
+        let resp: serde_json::Value = client.get(&url).send().await?.json().await?;
+
+        let latest_build = resp["builds"]["latest"]
+            .as_str()
+            .context("No latest build found for Purpur")?;
+
+        Ok(format!(
+            "https://api.purpurmc.org/v2/purpur/{}/{}/download",
+            version, latest_build
         ))
     }
 
@@ -774,6 +870,25 @@ impl ServerManager {
         Ok(versions)
     }
 
+    pub async fn fetch_purpur_versions(&self) -> Result<Vec<String>> {
+        let url = "https://api.purpurmc.org/v2/purpur";
+        let client = reqwest::Client::builder()
+            .user_agent("MinecraftServerManager/0.1.0")
+            .build()?;
+        let resp: serde_json::Value = client.get(url).send().await?.json().await?;
+
+        let mut versions: Vec<String> = resp["versions"]
+            .as_array()
+            .context("Invalid Purpur response format")?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        versions.reverse();
+
+        Ok(versions)
+    }
+
     pub async fn fetch_forge_versions(&self) -> Result<Vec<String>> {
         let client = reqwest::Client::builder()
             .user_agent("MinecraftServerManager/0.1.0")
@@ -877,6 +992,11 @@ impl ServerManager {
         });
 
         Ok(versions)
+    }
+
+    pub async fn fetch_spigot_versions(&self) -> Result<Vec<String>> {
+        // Spigot versions typically mirror vanilla releases
+        self.fetch_vanilla_versions().await
     }
 
     async fn create_default_properties(&self, server_path: &Path, port: u16) -> Result<()> {
@@ -1372,7 +1492,8 @@ impl ServerManager {
             ServerType::Forge => "[\"forge\"]",
             ServerType::Mohist => "[\"forge\",\"bukkit\"]", // Mohist is Forge + Bukkit hybrid
             ServerType::Banner => "[\"fabric\",\"bukkit\"]", // Banner is Fabric + Bukkit hybrid
-            ServerType::Vanilla => "[\"bukkit\"]",          // Fallback
+            ServerType::Purpur => "[\"purpur\",\"paper\",\"spigot\",\"bukkit\"]",
+            ServerType::Vanilla => "[\"bukkit\"]", // Fallback
         };
 
         let game_versions = format!("[\"{}\"]", version);
@@ -1454,6 +1575,7 @@ impl ServerManager {
             ServerType::Forge => "[\"categories:forge\"]",
             ServerType::Mohist => "[\"categories:forge\",\"categories:bukkit\"]",
             ServerType::Banner => "[\"categories:fabric\",\"categories:bukkit\"]",
+            ServerType::Purpur => "[\"categories:purpur\",\"categories:paper\",\"categories:spigot\",\"categories:bukkit\"]",
             ServerType::Vanilla => "[\"categories:bukkit\"]", // Weak fallback
         };
 
@@ -1692,5 +1814,133 @@ impl ServerManager {
         }
 
         self.start_server(server_id).await
+    }
+
+    async fn build_spigot_server(
+        &self,
+        app_handle: Option<tauri::AppHandle>,
+        server_path: &Path,
+        version: &str,
+    ) -> Result<()> {
+        let build_tools_url = "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar";
+        let build_tools_path = server_path.join("BuildTools.jar");
+
+        // Download BuildTools.jar
+        if let Some(h) = &app_handle {
+            let _ = h.emit("build-log", "Downloading BuildTools.jar...");
+        }
+        println!("Downloading BuildTools.jar...");
+        let client = reqwest::Client::builder()
+            .user_agent("MinecraftServerManager/0.1.0")
+            .build()?;
+
+        let response = client.get(build_tools_url).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Failed to download BuildTools.jar"));
+        }
+        let content = response.bytes().await?;
+        fs::write(&build_tools_path, content).await?;
+
+        // Ensure Java is available
+        let required_java = JavaManager::get_java_version_for_mc(version);
+        if !self.java_manager.is_java_installed(required_java) {
+            let msg = format!(
+                "Java {} missing for BuildTools, downloading...",
+                required_java
+            );
+            println!("{}", msg);
+            if let Some(h) = &app_handle {
+                let _ = h.emit("build-log", msg);
+            }
+            self.java_manager
+                .download_and_install_java(required_java)
+                .await?;
+        }
+        let java_path = self.java_manager.get_java_executable(required_java).await?;
+        let java_cmd = java_path.to_string_lossy().to_string();
+
+        println!("Running BuildTools (this may take a while)...");
+        if let Some(h) = &app_handle {
+            let _ = h.emit("build-log", "Running BuildTools (this may take a while)...");
+        }
+
+        #[cfg(target_os = "windows")]
+        let mut command = tokio::process::Command::new(&java_cmd);
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        #[cfg(not(target_os = "windows"))]
+        let mut command = tokio::process::Command::new(&java_cmd);
+
+        command
+            .arg("-jar")
+            .arg(&build_tools_path)
+            .arg("--rev")
+            .arg(version)
+            .current_dir(server_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_remove("M2_HOME")
+            .env_remove("MAVEN_HOME")
+            .env_remove("MVN_HOME");
+
+        let mut child = command.spawn()?;
+
+        let stdout = child.stdout.take().context("Failed to open stdout")?;
+        let stderr = child.stderr.take().context("Failed to open stderr")?;
+
+        let mut stdout_reader = tokio::io::BufReader::new(stdout).lines();
+        let mut stderr_reader = tokio::io::BufReader::new(stderr).lines();
+
+        if let Some(handle) = app_handle {
+            let handle_out = handle.clone();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stdout_reader.next_line().await {
+                    println!("[BuildTools] {}", line);
+                    let _ = handle_out.emit("build-log", line);
+                }
+            });
+
+            let handle_err = handle.clone();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    println!("[BuildTools ERR] {}", line);
+                    let _ = handle_err.emit("build-log", format!("ERROR: {}", line));
+                }
+            });
+        } else {
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stdout_reader.next_line().await {
+                    println!("[BuildTools] {}", line);
+                }
+            });
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    println!("[BuildTools ERR] {}", line);
+                }
+            });
+        }
+
+        let status = child.wait().await?;
+
+        if !status.success() {
+            return Err(anyhow::anyhow!("BuildTools failed with status: {}", status));
+        }
+
+        // Find spigot-*.jar and rename to server.jar
+        let spigot_jar = format!("spigot-{}.jar", version);
+        let built_jar = server_path.join(&spigot_jar);
+
+        if built_jar.exists() {
+            println!("Build successful! Renaming {} to server.jar", spigot_jar);
+            fs::rename(built_jar, server_path.join("server.jar")).await?;
+        } else {
+            return Err(anyhow::anyhow!(
+                "BuildTools finished but {} not found",
+                spigot_jar
+            ));
+        }
+
+        Ok(())
     }
 }

@@ -468,12 +468,12 @@
 
     <!-- Create Server Modal -->
     <div id="create-server-modal" class="modal hidden">
-        <div class="modal-content">
+        <div class="modal-content" style="width: 550px; max-width: 95vw;">
             <div class="modal-header">
                 <h2>新規サーバー作成</h2>
                 <button class="modal-close">&times;</button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="padding: 20px 40px;">
                 <div class="form-group">
                     <label for="server-name">サーバー名</label>
                     <input type="text" id="server-name" class="input" placeholder="My Server" autocomplete="off" />
@@ -489,7 +489,9 @@
                             </div>
                             <div class="custom-options">
                                 <span class="custom-option" data-value="vanilla">Vanilla</span>
+                                <span class="custom-option" data-value="spigot">Spigot</span>
                                 <span class="custom-option selected" data-value="paper">Paper (推奨)</span>
+                                <span class="custom-option" data-value="purpur">Purpur (最適化)</span>
                                 <span class="custom-option" data-value="forge">Forge (MOD対応)</span>
                                 <span class="custom-option" data-value="mohist">Mohist (Forge+Bukkit)</span>
                                 <span class="custom-option" data-value="banner">Banner (Fabric+Bukkit)</span>
@@ -529,12 +531,25 @@
                         <span class="input-suffix">GB</span>
                     </div>
                 </div>
-            </div>
-            <div class="modal-footer">
-                <button id="cancel-create-btn" class="btn btn-secondary">キャンセル</button>
-                <button id="confirm-create-btn" class="btn btn-primary">作成</button>
+
+                <div id="log-controls"
+                    style="display: none; justify-content: flex-end; margin-top: 10px; margin-bottom: 5px;">
+                    <button type="button" class="btn btn-secondary"
+                        style="font-size: 0.75rem; padding: 4px 8px; height: auto; min-height: 0;"
+                        onclick="copyBuildLog()">ログをコピー</button>
+                </div>
+                <div id="create-log-container"
+                    style="display: none; height: 120px; overflow-y: auto; background: #0f172a; padding: 10px; border-radius: 6px; font-family: 'Consolas', monospace; font-size: 11px; color: #94a3b8; border: 1px solid #334155; white-space: pre-wrap; word-break: break-all; user-select: text; cursor: text;">
+                </div>
             </div>
         </div>
+        <div class="modal-footer" style="display: flex; justify-content: center; gap: 20px; padding-top: 20px;">
+            <button id="cancel-create-btn" class="btn btn-secondary"
+                style="padding: 12px 40px; font-size: 1.1em;">キャンセル</button>
+            <button id="confirm-create-btn" class="btn btn-primary"
+                style="padding: 12px 40px; font-size: 1.1em;">作成</button>
+        </div>
+    </div>
     </div>
 
     <!-- Custom Confirmation Modal -->

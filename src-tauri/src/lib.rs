@@ -28,6 +28,7 @@ pub struct AppState {
 
 #[tauri::command]
 async fn create_server(
+    app_handle: tauri::AppHandle,
     name: String,
     version: String,
     server_type: String,
@@ -42,12 +43,13 @@ async fn create_server(
         "forge" => ServerType::Forge,
         "mohist" => ServerType::Mohist,
         "banner" => ServerType::Banner,
+        "purpur" => ServerType::Purpur,
         _ => return Err("Invalid server type".to_string()),
     };
 
     let manager = state.server_manager.lock().await;
     let result = manager
-        .create_server(name, version, st, port, max_memory)
+        .create_server(Some(app_handle), name, version, st, port, max_memory)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -539,6 +541,14 @@ async fn fetch_versions(
             .map_err(|e| e.to_string()),
         "banner" => manager
             .fetch_banner_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "purpur" => manager
+            .fetch_purpur_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "spigot" => manager
+            .fetch_spigot_versions()
             .await
             .map_err(|e| e.to_string()),
         _ => Err("Unsupported server type".to_string()),

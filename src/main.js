@@ -848,6 +848,8 @@ async function updateVersionList() {
         else if (type === 'forge') versions = await fetchVersions('forge');
         else if (type === 'mohist') versions = await fetchVersions('mohist');
         else if (type === 'banner') versions = await fetchVersions('banner');
+        else if (type === 'purpur') versions = await fetchVersions('purpur');
+        else if (type === 'spigot') versions = await fetchVersions('spigot');
 
         optionsCont.innerHTML = versions.map(v => `<span class="custom-option" data-value="${v}">${v}</span>`).join('');
 
@@ -898,7 +900,34 @@ async function createServer() {
     btn.disabled = true;
     btn.textContent = '作成中...';
 
+    // Log container setup
+    const logContainer = document.getElementById('create-log-container');
+    const logControls = document.getElementById('log-controls');
+    if (logContainer) {
+        logContainer.style.display = 'none';
+        logContainer.innerHTML = '';
+    }
+    if (logControls) {
+        logControls.style.display = 'none';
+    }
+
+    let unlisten = null;
+
     try {
+        // Setup build log listener
+        if (window.__TAURI__ && window.__TAURI__.event) {
+            unlisten = await window.__TAURI__.event.listen('build-log', (event) => {
+                if (logContainer) {
+                    logContainer.style.display = 'block';
+                    logContainer.textContent += event.payload + '\n';
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+                if (logControls) {
+                    logControls.style.display = 'flex';
+                }
+            });
+        }
+
         await invoke('create_server', { name, version, serverType: type, port, maxMemory: memory });
         showNotification('サーバーを作成しました', 'success');
         closeCreateServerModal();
@@ -908,6 +937,9 @@ async function createServer() {
     } finally {
         btn.disabled = false;
         btn.textContent = oldText;
+        if (unlisten) {
+            unlisten();
+        }
     }
 }
 
@@ -1387,3 +1419,12 @@ async function refreshPlayerList() {
 }
 
 console.log('[DEBUG] main.js loaded');
+
+function copyBuildLog() {
+    const el = document.getElementById('create-log-container');
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent)
+        .then(() => showNotification('ログをコピーしました', 'success'))
+        .catch(err => showNotification(`コピー失敗: ${err}`, 'error'));
+}
+window.copyBuildLog = copyBuildLog;

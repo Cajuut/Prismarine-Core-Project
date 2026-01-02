@@ -255,7 +255,7 @@ impl JavaManager {
         anyhow::bail!("Could not find java executable in installed directory")
     }
 
-    async fn download_and_install_java(&self, version: u8) -> Result<()> {
+    pub async fn download_and_install_java(&self, version: u8) -> Result<()> {
         println!("Installing Java {}...", version);
 
         let url = self.get_adoptium_download_url(version).await?;
