@@ -17,7 +17,7 @@
         "minHeight": 600,
         "decorations": false,
         "transparent": true,
-        "devtools": false
+        "devtools": true
       }
     ],
     "security": {

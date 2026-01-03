@@ -27,18 +27,26 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn new() -> Self {
-        Self {
-            system: System::new_all(),
-        }
+        let mut sys = System::new_all();
+        sys.refresh_all(); // Prime it
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        sys.refresh_all(); // Refresh again to get initial CPU readings
+
+        Self { system: sys }
     }
 
     /// Get overall system statistics
     pub fn get_system_stats(&mut self) -> SystemStats {
+        // Refresh all components
         self.system.refresh_all();
 
         let total_memory = self.system.total_memory();
         let used_memory = self.system.used_memory();
-        let memory_percent = (used_memory as f32 / total_memory as f32) * 100.0;
+        let memory_percent = if total_memory > 0 {
+            (used_memory as f32 / total_memory as f32) * 100.0
+        } else {
+            0.0
+        };
 
         SystemStats {
             cpu_usage: self.system.global_cpu_usage(),

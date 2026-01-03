@@ -1,5 +1,6 @@
 mod bridge;
 mod config;
+mod java_detector;
 mod monitor;
 mod port_manager;
 mod server_manager;
@@ -7,7 +8,7 @@ mod server_manager;
 use bridge::{BridgeStatus, PrismarineBridge};
 use monitor::Monitor;
 use port_manager::PortManager;
-use server_manager::{ServerManager, ServerType};
+use server_manager::{RestartType, ServerManager, ServerType};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
@@ -39,6 +40,14 @@ async fn create_server(
         "paper" => ServerType::Paper,
         "spigot" => ServerType::Spigot,
         "forge" => ServerType::Forge,
+        "fabric" => ServerType::Fabric,
+        "mohist" => ServerType::Mohist,
+        "taiyitist" => ServerType::Taiyitist,
+        "purpur" => ServerType::Purpur,
+        "banner" => ServerType::Banner,
+        "velocity" => ServerType::Velocity,
+        "waterfall" => ServerType::Waterfall,
+        "bungeecord" => ServerType::BungeeCord,
         _ => return Err("Invalid server type".to_string()),
     };
 
@@ -203,11 +212,12 @@ async fn install_plugin(
 async fn install_modrinth_plugin(
     server_id: String,
     project_id: String,
+    plugin_name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let manager = state.server_manager.lock().await;
     manager
-        .install_modrinth_plugin(&server_id, &project_id)
+        .install_modrinth_plugin(&server_id, &project_id, &plugin_name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -216,11 +226,12 @@ async fn install_modrinth_plugin(
 async fn install_spigot_plugin(
     server_id: String,
     resource_id: String,
+    plugin_name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let manager = state.server_manager.lock().await;
     manager
-        .install_spigot_plugin(&server_id, &resource_id)
+        .install_spigot_plugin(&server_id, &resource_id, &plugin_name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -228,13 +239,12 @@ async fn install_spigot_plugin(
 #[tauri::command]
 async fn uninstall_plugin(
     server_id: String,
-    plugin_id: String,
-    source: String,
+    plugin_name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let manager = state.server_manager.lock().await;
     manager
-        .uninstall_plugin(&server_id, &plugin_id, &source)
+        .uninstall_plugin(&server_id, &plugin_name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -242,13 +252,12 @@ async fn uninstall_plugin(
 #[tauri::command]
 async fn is_plugin_installed(
     server_id: String,
-    plugin_id: String,
-    source: String,
+    plugin_name: String,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let manager = state.server_manager.lock().await;
     manager
-        .is_plugin_installed(&server_id, &plugin_id, &source)
+        .is_plugin_installed(&server_id, &plugin_name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -454,11 +463,10 @@ async fn open_server_folder(server_id: String, state: State<'_, AppState>) -> Re
 async fn open_plugins_folder(server_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let server_path = {
         let manager = state.server_manager.lock().await;
-        if let Some(server) = manager.get_server(&server_id).await {
-            server.path.join("plugins")
-        } else {
-            return Err("Server not found".to_string());
-        }
+        manager
+            .get_plugins_path(&server_id)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     // Ensure plugins folder exists
@@ -501,12 +509,39 @@ async fn get_online_players(
 async fn set_auto_restart(
     server_id: String,
     enabled: bool,
+    restart_type: String, // "Interval" or "Schedule"
     interval: u64,
+    schedule: Option<String>,
+    time_zone: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let r_type = match restart_type.as_str() {
+        "Schedule" => RestartType::Schedule,
+        _ => RestartType::Interval,
+    };
+
+    let manager = state.server_manager.lock().await;
+    manager
+        .set_auto_restart(&server_id, enabled, r_type, interval, schedule, time_zone)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_server_memory(
+    server_id: String,
+    memory: String, // This will be max_memory from frontend
+    min_memory: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let manager = state.server_manager.lock().await;
     manager
-        .set_auto_restart(&server_id, enabled, interval)
+        .set_server_memory(&server_id, &memory, &min_memory)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    manager
+        .save_servers(&state.config_path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -526,8 +561,97 @@ async fn fetch_versions(
             .fetch_paper_versions()
             .await
             .map_err(|e| e.to_string()),
+        "fabric" => manager
+            .fetch_fabric_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "mohist" => manager
+            .fetch_mohist_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "taiyitist" => manager
+            .fetch_taiyitist_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "purpur" => manager
+            .fetch_purpur_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "banner" => manager
+            .fetch_banner_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "spigot" => manager
+            .fetch_spigot_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "velocity" => manager
+            .fetch_velocity_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "waterfall" => manager
+            .fetch_waterfall_versions()
+            .await
+            .map_err(|e| e.to_string()),
+        "bungeecord" => manager
+            .fetch_bungeecord_versions()
+            .await
+            .map_err(|e| e.to_string()),
         _ => Err("Unsupported server type".to_string()),
     }
+}
+
+#[tauri::command]
+async fn get_proxy_servers(
+    proxy_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<server_manager::ProxyServerEntry>, String> {
+    let manager = state.server_manager.lock().await;
+    manager
+        .get_proxy_registered_servers(&proxy_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_proxy_server(
+    proxy_id: String,
+    name: String,
+    address: String,
+    add_to_try: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let manager = state.server_manager.lock().await;
+    manager
+        .add_server_to_proxy(&proxy_id, &name, &address, add_to_try.unwrap_or(true))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_proxy_server(
+    proxy_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let manager = state.server_manager.lock().await;
+    manager
+        .remove_server_from_proxy(&proxy_id, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn configure_backend_for_proxy(
+    backend_id: String,
+    proxy_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let manager = state.server_manager.lock().await;
+    manager
+        .configure_backend_for_proxy(&backend_id, &proxy_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -614,6 +738,16 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(move |_app| {
+            // Spawn background task for auto-restart monitor
+            let monitor_manager = Arc::clone(&server_manager);
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                    let manager = monitor_manager.lock().await;
+                    manager.check_and_restart_servers().await;
+                }
+            });
+
             // Load saved servers in setup hook (inside Tauri's async runtime)
             tauri::async_runtime::spawn(async move {
                 let manager = server_manager.lock().await;
@@ -668,6 +802,11 @@ pub fn run() {
             restart_server,
             get_online_players,
             set_auto_restart,
+            set_server_memory,
+            get_proxy_servers,
+            add_proxy_server,
+            remove_proxy_server,
+            configure_backend_for_proxy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
