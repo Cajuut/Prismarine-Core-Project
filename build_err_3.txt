@@ -1,6 +1,0 @@
-   Compiling tauri v2.9.5
-   Compiling tauri-macros v2.5.2
-   Compiling tauri-plugin-shell v2.3.3
-   Compiling tauri-plugin-opener v2.5.2
-   Compiling prismarine v0.1.0 (C:\Users\mikan\.gemini\antigravity\scratch\Prismarine-Core-Project\src-tauri)
-    Finished `release` profile [optimized] target(s) in 13m 17s
