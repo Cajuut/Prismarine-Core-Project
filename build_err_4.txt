@@ -1,0 +1,68 @@
+    Checking prismarine v0.1.0 (C:\Users\mikan\.gemini\antigravity\scratch\Prismarine-Core-Project\src-tauri)
+warning: unused imports: `SeekFrom` and `Seek`
+ --> src\java_detector.rs:1:21
+  |
+1 | use std::io::{Read, Seek, SeekFrom};
+  |                     ^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `read_exact` found for struct `std::io::BufReader<R>` in the current scope
+    --> src\monitor.rs:112:24
+     |
+ 112 |                 reader.read_exact(&mut chunk)?;
+     |                        ^^^^^^^^^^
+     |
+    ::: C:\Users\mikan\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\std\src\io\mod.rs:1044:8
+     |
+1044 |     fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
+     |        ---------- the method is available for `std::io::BufReader<std::fs::File>` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `Read` which provides `read_exact` is implemented but not in scope; perhaps you want to import it
+     |
+   1 + use std::io::Read;
+     |
+help: there is a method `read_int` with a similar name
+     |
+ 112 -                 reader.read_exact(&mut chunk)?;
+ 112 +                 reader.read_int(&mut chunk)?;
+     |
+
+error[E0599]: no method named `read_to_string` found for struct `std::io::BufReader<R>` in the current scope
+   --> src\monitor.rs:127:20
+    |
+127 |             reader.read_to_string(&mut final_content)?;
+    |                    ^^^^^^^^^^^^^^
+    |
+   ::: C:\Users\mikan\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\std\src\io\mod.rs:991:8
+    |
+991 |     fn read_to_string(&mut self, buf: &mut String) -> Result<usize> {
+    |        -------------- the method is available for `std::io::BufReader<std::fs::File>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Read` which provides `read_to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use std::io::Read;
+    |
+help: there is a method `read_to_end` with a similar name
+    |
+127 -             reader.read_to_string(&mut final_content)?;
+127 +             reader.read_to_end(&mut final_content)?;
+    |
+
+warning: unused import: `Read`
+ --> src\java_detector.rs:1:15
+  |
+1 | use std::io::{Read, Seek, SeekFrom};
+  |               ^^^^
+
+warning: unused import: `BufRead`
+  --> src\monitor.rs:90:27
+   |
+90 |             use std::io::{BufRead, BufReader, Seek, SeekFrom};
+   |                           ^^^^^^^
+
+For more information about this error, try `rustc --explain E0599`.
+warning: `prismarine` (lib) generated 3 warnings
+error: could not compile `prismarine` (lib) due to 2 previous errors; 3 warnings emitted

@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::os::windows::process::CommandExt;
+use std::process::Stdio;
 
 #[derive(Debug, Clone)]
 pub struct JavaInstallation {
@@ -86,20 +87,78 @@ pub fn find_java_installations() -> Vec<JavaInstallation> {
         }
     }
 
-    // Fallback: try system java
-    if let Some(version) = get_java_version("java") {
-        installations.push(JavaInstallation {
-            path: "java".to_string(),
-            version,
-        });
+    // Check for bundled JDK in application data directory
+    if let Ok(data_dir) = std::env::var("LOCALAPPDATA") {
+        let bundled_path = std::path::PathBuf::from(data_dir)
+            .join("MinecraftServerManager")
+            .join("jdk");
+        if bundled_path.exists() {
+            scan_java_in_directory(&bundled_path, &mut installations);
+        }
+    }
+
+    // Check for bundled JDK in current directory (for portable/dev)
+    let local_jdk = std::path::PathBuf::from("jdk");
+    if local_jdk.exists() {
+        scan_java_in_directory(&local_jdk, &mut installations);
+    } else {
+        // Create the directory if it doesn't exist to prepare for downloads
+        let _ = std::fs::create_dir_all(&local_jdk);
     }
 
     installations
 }
 
+fn scan_java_in_directory(path: &std::path::Path, installations: &mut Vec<JavaInstallation>) {
+    #[cfg(target_os = "windows")]
+    let java_exe = path.join("bin").join("java.exe");
+    #[cfg(not(target_os = "windows"))]
+    let java_exe = path.join("bin").join("java");
+
+    if java_exe.exists() {
+        if let Some(version) = get_java_version(&java_exe.to_string_lossy()) {
+            installations.push(JavaInstallation {
+                path: java_exe.to_string_lossy().to_string(),
+                version,
+            });
+        }
+    }
+
+    // Also scan subdirectories (for cases where JDK is in a subfolder like jdk-21.0.1/)
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.path().is_dir() {
+                #[cfg(target_os = "windows")]
+                let sub_java = entry.path().join("bin").join("java.exe");
+                #[cfg(not(target_os = "windows"))]
+                let sub_java = entry.path().join("bin").join("java");
+
+                if sub_java.exists() {
+                    if let Some(version) = get_java_version(&sub_java.to_string_lossy()) {
+                        installations.push(JavaInstallation {
+                            path: sub_java.to_string_lossy().to_string(),
+                            version,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Get Java major version from a java executable
 pub fn get_java_version(java_path: &str) -> Option<u8> {
-    let output = Command::new(java_path).arg("-version").output().ok()?;
+    let mut cmd = std::process::Command::new(java_path);
+    cmd.arg("-version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let output = cmd.output().ok()?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -136,7 +195,7 @@ pub fn get_required_java_version(mc_version: &str) -> u8 {
     let parts: Vec<&str> = mc_version.split('.').collect();
 
     if parts.len() < 2 {
-        return 8; // Default to Java 8
+        return 21; // Default to Java 21 for unknown/Manual versions
     }
 
     let major = parts[0].parse::<u16>().unwrap_or(1);
@@ -147,7 +206,9 @@ pub fn get_required_java_version(mc_version: &str) -> u8 {
         .unwrap_or(0);
 
     // Minecraft version logic
-    if major == 1 {
+    if major >= 26 || (major == 1 && minor >= 26) {
+        25 // 1.26+ or 26.x
+    } else if major == 1 {
         if minor >= 21 || (minor == 20 && patch >= 5) {
             21 // 1.20.5+
         } else if minor >= 17 {
@@ -156,38 +217,135 @@ pub fn get_required_java_version(mc_version: &str) -> u8 {
             8 // 1.16.5 and below
         }
     } else {
-        21 // Future versions
+        21 // Default for other future versions unless explicitly handled
     }
 }
 
-/// Select best Java for Minecraft version
-pub fn select_java_for_minecraft(mc_version: &str) -> Option<String> {
+/// Select Java by exact major version
+pub async fn select_java_by_version(required: u8) -> Option<String> {
+    let installations = find_java_installations();
+    if let Some(install) = installations.iter().find(|j| j.version == required) {
+        return Some(install.path.clone());
+    }
+    None
+}
+
+/// Select best Java for Minecraft version, download if missing
+pub async fn select_java_for_minecraft(mc_version: &str) -> Option<String> {
     let required = get_required_java_version(mc_version);
     let installations = find_java_installations();
 
-    println!(
-        "[Java Selector] Minecraft {} requires Java {}",
-        mc_version, required
-    );
-    println!(
-        "[Java Selector] Found {} Java installations",
-        installations.len()
-    );
-
-    for install in &installations {
-        println!(
-            "[Java Selector] - Java {} at {}",
-            install.version, install.path
-        );
+    // Check if we already have it
+    if let Some(install) = installations.iter().find(|j| j.version == required) {
+        return Some(install.path.clone());
     }
 
-    // Find Java that meets requirements (prefer closest version)
-    installations
-        .iter()
-        .filter(|j| j.version >= required)
-        .min_by_key(|j| j.version)
-        .map(|j| {
-            println!("[Java Selector] Selected: Java {} at {}", j.version, j.path);
-            j.path.clone()
-        })
+    // Fallback: check if we have any compatible higher version
+    if let Some(install) = installations.iter().filter(|j| j.version > required).min_by_key(|j| j.version) {
+        return Some(install.path.clone());
+    }
+
+    // NO JAVA FOUND! Try to download
+    println!("[Java Selector] No suitable Java found for MC {}. Attempting to download Java {}...", mc_version, required);
+    
+    match download_and_extract_jdk(required).await {
+        Ok(path) => Some(path),
+        Err(e) => {
+            println!("[Java Selector] Failed to download Java {}: {}", required, e);
+            None
+        }
+    }
+}
+
+/// Download and extract JDK from Adoptium
+pub async fn download_and_extract_jdk(major_version: u8) -> anyhow::Result<String> {
+    let local_jdk_base = std::path::PathBuf::from("jdk");
+    let target_dir = local_jdk_base.join(format!("java-{}", major_version));
+    
+    if target_dir.exists() {
+        // Double check if java.exe exists inside
+        #[cfg(target_os = "windows")]
+        let java_exe = target_dir.join("bin").join("java.exe");
+        #[cfg(not(target_os = "windows"))]
+        let java_exe = target_dir.join("bin").join("java");
+        
+        if java_exe.exists() {
+            return Ok(java_exe.to_string_lossy().to_string());
+        }
+    }
+
+    std::fs::create_dir_all(&target_dir)?;
+
+    // Adoptium API URL
+    let arch = if cfg!(target_arch = "x86_64") { "x64" } else { "aarch64" };
+    let os = if cfg!(target_os = "windows") { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" };
+    
+    let url = format!(
+        "https://api.adoptium.net/v3/binary/latest/{}/ga/{}/{}/jdk/hotspot/normal/eclipse",
+        major_version, os, arch
+    );
+
+    println!("[JDK Download] Downloading Java {} from {}...", major_version, url);
+    
+    let client = reqwest::Client::builder()
+        .user_agent("MinecraftServerManager/0.1.0")
+        .build()?;
+        
+    let response = client.get(url).send().await?;
+    if !response.status().is_success() {
+        anyhow::bail!("Failed to download JDK: {}", response.status());
+    }
+
+    let bytes = response.bytes().await?;
+    let reader = std::io::Cursor::new(bytes);
+    
+    println!("[JDK Download] Extracting Java {}...", major_version);
+    
+    let mut archive = zip::ZipArchive::new(reader)?;
+    
+    // Most Adoptium zips have a single root directory (e.g. jdk-17.0.1+12)
+    // We want to extract its contents directly into target_dir or keep the structure
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let outpath = match file.enclosed_name() {
+            Some(path) => {
+                // Remove the first component of the path (the root dir in zip)
+                let mut components = path.components();
+                components.next(); // skip root dir
+                target_dir.join(components.as_path())
+            },
+            None => continue,
+        };
+
+        if (*file.name()).ends_with('/') {
+            std::fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    std::fs::create_dir_all(&p)?;
+                }
+            }
+            let mut outfile = std::fs::File::create(&outpath)?;
+            std::io::copy(&mut file, &mut outfile)?;
+        }
+        
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(mode) = file.unix_mode() {
+                std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode))?;
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    let java_exe = target_dir.join("bin").join("java.exe");
+    #[cfg(not(target_os = "windows"))]
+    let java_exe = target_dir.join("bin").join("java");
+
+    if java_exe.exists() {
+        Ok(java_exe.to_string_lossy().to_string())
+    } else {
+        anyhow::bail!("Failed to find java executable after extraction")
+    }
 }

@@ -1,0 +1,46 @@
+    Checking prismarine v0.1.0 (C:\Users\mikan\.gemini\antigravity\scratch\Prismarine-Core-Project\src-tauri)
+error[E0433]: failed to resolve: use of undeclared type `Stdio`
+   --> src\java_detector.rs:149:17
+    |
+149 |         .stdout(Stdio::piped())
+    |                 ^^^^^ use of undeclared type `Stdio`
+    |
+help: consider importing this struct
+    |
+  1 + use std::process::Stdio;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `Stdio`
+   --> src\java_detector.rs:150:17
+    |
+150 |         .stderr(Stdio::piped());
+    |                 ^^^^^ use of undeclared type `Stdio`
+    |
+help: consider importing this struct
+    |
+  1 + use std::process::Stdio;
+    |
+
+warning: unused import: `std::process::Command`
+ --> src\java_detector.rs:1:5
+  |
+1 | use std::process::Command;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::os::windows::process::CommandExt`
+   --> src\server_manager.rs:343:17
+    |
+343 |             use std::os::windows::process::CommandExt;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::os::windows::process::CommandExt`
+   --> src\server_manager.rs:958:17
+    |
+958 |             use std::os::windows::process::CommandExt;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0433`.
+warning: `prismarine` (lib) generated 3 warnings
+error: could not compile `prismarine` (lib) due to 2 previous errors; 3 warnings emitted

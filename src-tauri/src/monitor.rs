@@ -75,7 +75,7 @@ impl Monitor {
         }
     }
 
-    /// Read last N lines from server log
+    /// Read last N lines from server log efficiently by seeking from the end
     pub async fn get_server_logs(server_path: &Path, lines: usize) -> Result<Vec<String>> {
         let log_path = server_path.join("logs").join("latest.log");
 
@@ -83,16 +83,63 @@ impl Monitor {
             return Ok(Vec::new());
         }
 
-        let content = fs::read_to_string(&log_path).await?;
-        let all_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        // Open file in a blocking task since std::io::Seek is not async in a simple way 
+        // without complex wrappers, and small reads are fine in spawn_blocking
+        let log_path_clone = log_path.to_path_buf();
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            use std::io::{BufReader, Read, Seek, SeekFrom};
+            let file = std::fs::File::open(&log_path_clone)?;
+            let mut reader = BufReader::new(file);
+            
+            // Go to end
+            let file_size = reader.seek(SeekFrom::End(0))?;
+            if file_size == 0 {
+                return Ok(Vec::new());
+            }
 
-        let start = if all_lines.len() > lines {
-            all_lines.len() - lines
-        } else {
-            0
-        };
+            let mut pos = file_size;
+            let mut lines_found = 0;
+            
+            // Read backwards in chunks to find line breaks
+            let chunk_size = 4096;
+            while pos > 0 && lines_found <= lines {
+                let to_read = std::cmp::min(pos, chunk_size as u64);
+                pos -= to_read;
+                reader.seek(SeekFrom::Start(pos))?;
+                
+                let mut chunk = vec![0; to_read as usize];
+                reader.read_exact(&mut chunk)?;
+                
+                for &byte in chunk.iter().rev() {
+                    if byte == b'\n' {
+                        lines_found += 1;
+                        if lines_found > lines {
+                            break;
+                        }
+                    }
+                }
+            }
 
-        Ok(all_lines[start..].to_vec())
+            // Now read from 'pos' to the end and split into lines
+            reader.seek(SeekFrom::Start(pos))?;
+            let mut final_content = String::new();
+            reader.read_to_string(&mut final_content)?;
+            
+            let mut result_lines: Vec<String> = final_content
+                .lines()
+                .map(|s| s.to_string())
+                .collect();
+                
+            // Trim to exactly requested lines if we overshot slightly
+            if result_lines.len() > lines {
+                let start = result_lines.len() - lines;
+                result_lines = result_lines[start..].to_vec();
+            }
+            
+            Ok(result_lines)
+        }).await??;
+
+        Ok(result)
     }
 
     /// Parse server.properties to get max players

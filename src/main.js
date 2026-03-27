@@ -455,6 +455,76 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+/**
+ * カスタムプロンプトモーダルを表示
+ * @param {string} title - タイトル
+ * @param {string} defaultValue - 初期値
+ * @returns {Promise<string|null>} - 入力された文字列、キャンセル時はnull
+ */
+function showPromptModal(title, defaultValue = '') {
+    return new Promise(resolve => {
+        const modal = document.getElementById('prompt-modal');
+        const input = document.getElementById('prompt-modal-input');
+        if (!modal || !input) return resolve(null);
+
+        input.value = defaultValue;
+        document.getElementById('prompt-modal-title').textContent = title;
+
+        modal.classList.add('active');
+        setTimeout(() => input.focus(), 50);
+
+        const okBtn = document.getElementById('prompt-modal-ok');
+        const cancelBtn = document.getElementById('prompt-modal-cancel');
+
+        const closePrompt = (val) => {
+            modal.classList.remove('active');
+            okBtn.onclick = null;
+            cancelBtn.onclick = null;
+            input.onkeydown = null;
+            resolve(val);
+        };
+
+        okBtn.onclick = () => closePrompt(input.value);
+        cancelBtn.onclick = () => closePrompt(null);
+        input.onkeydown = (e) => { 
+            if (e.key === 'Enter') closePrompt(input.value); 
+            if (e.key === 'Escape') closePrompt(null); 
+        };
+    });
+}
+
+// =============================================
+// File Drop Handler for Custom JAR import (Tauri v2)
+// =============================================
+if (window.__TAURI__) {
+    const { listen } = window.__TAURI__.event;
+    // tauri://drag-drop は、配列 paths を含むオブジェクトが渡される
+    listen('tauri://drag-drop', async (event) => {
+        console.log('[DEBUG] File dropped:', event.payload);
+        const paths = event.payload.paths;
+        if (paths && paths.length > 0) {
+            const jarPath = paths[0];
+            if (jarPath.toLowerCase().endsWith('.jar')) {
+                const fileName = jarPath.split(/[\\/]/).pop();
+                const name = await showPromptModal(`ファイルをカスタムサーバーとしてインポートしますか？\nファイル: ${fileName}`, fileName.replace('.jar', ''));
+                
+                if (name) {
+                    try {
+                        showNotification('サーバーを作成中...', 'info');
+                        await invoke('create_custom_server', { name, jarPath, port: 25565, maxMemory: '2G' });
+                        showNotification('カスタムサーバーを作成しました！', 'success');
+                        await loadServers();
+                    } catch (e) {
+                        showNotification(`作成失敗: ${e}`, 'error');
+                    }
+                }
+            } else {
+                showNotification('JARファイルのみドロップ可能です', 'warn');
+            }
+        }
+    });
+}
+
 // =============================================
 // Modal Logic
 // =============================================
@@ -646,7 +716,16 @@ async function stopServer(id) {
         showNotification('サーバーを停止します...', 'info');
         await invoke('stop_server', { serverId: id });
         await loadServers();
-        if (currentDetailServerId === id) showServerDetail(id);
+        if (currentDetailServerId === id) {
+            showServerDetail(id);
+            // After 3 seconds, clear logs to clean up UI
+            setTimeout(() => {
+                if (currentDetailServerId === id && servers.find(s => s.id === id)?.status === 'Stopped') {
+                    const logContainer = document.getElementById('detail-logs-content');
+                    if (logContainer) logContainer.innerHTML = '<div class="logs-empty">ログなし (停止後にクリアされました)</div>';
+                }
+            }, 3000);
+        }
     } catch (err) {
         showNotification(`停止失敗: ${err}`, 'error');
     }
@@ -683,15 +762,94 @@ async function showServerDetail(id) {
     switchView('server-detail');
 
     // Populate Fields
-    document.getElementById('detail-server-name').textContent = server.name;
+    const nameEl = document.getElementById('detail-server-name');
+    nameEl.textContent = server.name;
+    // Add edit handler for name
+    nameEl.style.cursor = 'pointer';
+    nameEl.onclick = async () => {
+        const newName = await showPromptModal('サーバー名を変更', server.name);
+        if (newName && newName !== server.name) {
+            await invoke('update_server_meta', { serverId: id, name: newName });
+            server.name = newName;
+            nameEl.textContent = newName;
+            loadServers();
+        }
+    };
+
     const statusEl = document.getElementById('detail-server-status');
     statusEl.textContent = server.status;
     statusEl.className = `server-status ${server.status.toLowerCase()}`;
 
-    document.getElementById('detail-server-type').textContent = server.server_type;
-    document.getElementById('detail-server-version').textContent = server.version;
-    document.getElementById('detail-server-port').textContent = server.port;
+    const typeEl = document.getElementById('detail-server-type');
+    typeEl.textContent = server.server_type;
+    
+    const verEl = document.getElementById('detail-server-version');
+    verEl.textContent = server.version;
+
+    // Add edit handler for version/type if it is Custom
+    if (server.server_type === 'Custom') {
+        typeEl.style.borderBottom = '1px dashed #555';
+        typeEl.style.cursor = 'pointer';
+        typeEl.onclick = async () => {
+             showNotification('サーバータイプ自体は内部変更できませんが、表示名の変更をご希望ですか？', 'info');
+             // For now we allow editing name/version which are more common.
+        };
+
+        verEl.style.borderBottom = '1px dashed #555';
+        verEl.style.cursor = 'pointer';
+        verEl.onclick = async () => {
+            const newVer = await showPromptModal('バージョン表示を変更', server.version);
+            if (newVer !== null && newVer !== server.version) {
+                await invoke('update_server_meta', { serverId: id, version: newVer });
+                server.version = newVer;
+                verEl.textContent = newVer;
+                loadServers();
+            }
+        };
+    } else {
+        typeEl.style.borderBottom = 'none';
+        verEl.style.borderBottom = 'none';
+        typeEl.onclick = null;
+        verEl.onclick = null;
+    }
+
+    // Memory row
     document.getElementById('detail-server-memory').textContent = server.max_memory;
+
+    // Java Version row
+    let javaRow = document.getElementById('detail-java-row');
+    if (!javaRow) {
+        const memRow = document.getElementById('detail-server-memory').parentElement;
+        javaRow = document.createElement('div');
+        javaRow.id = 'detail-java-row';
+        javaRow.className = 'detail-item';
+        javaRow.innerHTML = `
+            <span class="detail-label">Java:</span>
+            <span class="detail-value" id="detail-java-version">Auto</span>
+        `;
+        memRow.parentElement.insertBefore(javaRow, memRow.nextSibling);
+    }
+    
+    const javaVal = document.getElementById('detail-java-version');
+    javaVal.textContent = server.java_version ? `Java ${server.java_version}` : 'Auto';
+    javaVal.style.cursor = 'pointer';
+    javaVal.style.borderBottom = '1px dashed #555';
+    javaVal.onclick = async () => {
+        const choice = await showPromptModal('使用するJavaバージョンを入力 (8, 17, 21, 25) または空欄で解除', server.java_version || '');
+        if (choice === null) return;
+        
+        const ver = parseInt(choice);
+        if (choice === '' || isNaN(ver)) {
+            await invoke('update_server_meta', { serverId: id, javaVersion: null });
+            server.java_version = null;
+            javaVal.textContent = 'Auto';
+        } else {
+            await invoke('update_server_meta', { serverId: id, javaVersion: ver });
+            server.java_version = ver;
+            javaVal.textContent = `Java ${ver}`;
+        }
+        showNotification('Java設定を更新しました', 'success');
+    };
 
     // Update UI based on server type (Vanilla/Mod/Plugin)
     updateUIForServerType(server.server_type);
@@ -1034,6 +1192,7 @@ async function updateVersionList() {
         else if (type === 'velocity') versions = await fetchVersions('velocity');
         else if (type === 'waterfall') versions = await fetchVersions('waterfall');
         else if (type === 'bungeecord') versions = await fetchVersions('bungeecord');
+        else if (type === 'custom') versions = await fetchVersions('custom');
         else {
             console.warn('[updateVersionList] Unknown server type:', type);
             versions = await fetchVersions('vanilla'); // Fallback
@@ -1127,16 +1286,23 @@ async function checkUPnPStatus() {
 
 function startMonitoring() {
     updateSystemStats();
-    updateInterval = setInterval(updateSystemStats, 3000);
+    updateInterval = setInterval(() => {
+        updateSystemStats();
+        // Refresh servers periodically to detect status changes (e.g. spontaneous exit)
+        const currentView = document.querySelector('.view.active')?.dataset.view;
+        if (currentView === 'dashboard' || currentView === 'servers' || currentView === 'server-detail') {
+            loadServers();
+        }
+    }, 5000); // Check every 5s
 }
 
 async function updateSystemStats() {
     try {
         const stats = await invoke('get_system_stats');
-        document.getElementById('cpu-usage').textContent = `${stats.cpu_usage.toFixed(1)}%`;
-        document.getElementById('memory-usage').textContent = `${(stats.memory_used / 1024 / 1024).toFixed(0)} MB`;
-        document.getElementById('cpu-percent').textContent = `${stats.cpu_usage.toFixed(1)}%`;
-        document.getElementById('memory-percent').textContent = `${stats.memory_percent.toFixed(0)}%`;
+        if (document.getElementById('cpu-usage')) document.getElementById('cpu-usage').textContent = `${stats.cpu_usage.toFixed(1)}%`;
+        if (document.getElementById('memory-usage')) document.getElementById('memory-usage').textContent = `${(stats.memory_used / 1024 / 1024).toFixed(0)} MB`;
+        if (document.getElementById('cpu-percent')) document.getElementById('cpu-percent').textContent = `${stats.cpu_usage.toFixed(1)}%`;
+        if (document.getElementById('memory-percent')) document.getElementById('memory-percent').textContent = `${stats.memory_percent.toFixed(0)}%`;
     } catch (e) { }
 }
 

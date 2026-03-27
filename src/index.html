@@ -332,7 +332,7 @@
 
                     <div class="settings-group">
                         <h3>アプリケーション情報</h3>
-                        <p class="info-text">Minecraft Server Manager v0.1.0</p>
+                        <p class="info-text">Prismarine Server Manager v1.1</p>
                         <p class="info-text">Powered by Tauri + Rust</p>
                     </div>
                 </section>
@@ -651,6 +651,7 @@
                                 <span class="custom-option" data-value="velocity">Velocity (推奨)</span>
                                 <span class="custom-option" data-value="waterfall">Waterfall</span>
                                 <span class="custom-option" data-value="bungeecord">BungeeCord</span>
+                                <div class="option-divider">Others</div>
                             </div>
                         </div>
                         <input type="hidden" id="server-type" value="paper">
@@ -714,6 +715,28 @@
             <div class="confirm-modal-actions">
                 <button id="confirm-modal-cancel" class="btn btn-ghost">キャンセル</button>
                 <button id="confirm-modal-ok" class="btn btn-danger">削除する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Prompt Modal -->
+    <div id="prompt-modal" class="confirm-modal">
+        <div class="confirm-modal-backdrop"></div>
+        <div class="confirm-modal-content">
+            <div class="confirm-modal-icon" style="background: rgba(52, 152, 219, 0.1); color: #3498db;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </div>
+            <h3 class="confirm-modal-title" id="prompt-modal-title">入力してください</h3>
+            <div style="margin: 15px 0; width: 100%;">
+                <input type="text" id="prompt-modal-input" class="input" style="width: 100%; box-sizing: border-box;" placeholder="ここに入力...">
+            </div>
+            <div class="confirm-modal-actions">
+                <button id="prompt-modal-cancel" class="btn btn-ghost">キャンセル</button>
+                <button id="prompt-modal-ok" class="btn btn-primary-gradient">決定</button>
             </div>
         </div>
     </div>

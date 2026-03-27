@@ -504,19 +504,26 @@ fn add_windows_firewall_rule_proto(port: u16, protocol: &str) -> Result<()> {
         port, protocol, protocol, port
     );
 
-    std::process::Command::new("powershell")
-        .args([
-            "-Command",
-            "Start-Process",
-            "netsh",
-            "-ArgumentList",
-            &format!("'{}'", cmd),
-            "-Verb",
-            "RunAs",
-            "-WindowStyle",
-            "Hidden",
-        ])
-        .output()?;
+    let mut powershell_cmd = std::process::Command::new("powershell");
+    powershell_cmd.args([
+        "-Command",
+        "Start-Process",
+        "netsh",
+        "-ArgumentList",
+        &format!("'{}'", cmd),
+        "-Verb",
+        "RunAs",
+        "-WindowStyle",
+        "Hidden",
+    ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        powershell_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    powershell_cmd.output()?;
 
     Ok(())
 }
@@ -528,19 +535,26 @@ fn remove_windows_firewall_rule_proto(port: u16, protocol: &str) -> Result<()> {
         port, protocol, protocol, port
     );
 
-    std::process::Command::new("powershell")
-        .args([
-            "-Command",
-            "Start-Process",
-            "netsh",
-            "-ArgumentList",
-            &format!("'{}'", cmd),
-            "-Verb",
-            "RunAs",
-            "-WindowStyle",
-            "Hidden",
-        ])
-        .output()?;
+    let mut powershell_cmd = std::process::Command::new("powershell");
+    powershell_cmd.args([
+        "-Command",
+        "Start-Process",
+        "netsh",
+        "-ArgumentList",
+        &format!("'{}'", cmd),
+        "-Verb",
+        "RunAs",
+        "-WindowStyle",
+        "Hidden",
+    ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        powershell_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    powershell_cmd.output()?;
 
     Ok(())
 }

@@ -48,6 +48,7 @@ async fn create_server(
         "velocity" => ServerType::Velocity,
         "waterfall" => ServerType::Waterfall,
         "bungeecord" => ServerType::BungeeCord,
+        "custom" => ServerType::Custom,
         _ => return Err("Invalid server type".to_string()),
     };
 
@@ -61,6 +62,47 @@ async fn create_server(
     let _ = manager.save_servers(&state.config_path).await;
 
     Ok(result)
+}
+
+#[tauri::command]
+async fn create_custom_server(
+    name: String,
+    jar_path: String,
+    port: u16,
+    max_memory: String,
+    state: State<'_, AppState>,
+) -> Result<server_manager::ServerInfo, String> {
+    let manager = state.server_manager.lock().await;
+    let result = manager
+        .create_custom_server(name, jar_path, port, max_memory)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Save servers after creation
+    let _ = manager.save_servers(&state.config_path).await;
+
+    Ok(result)
+}
+
+#[tauri::command]
+async fn update_server_meta(
+    server_id: String,
+    name: Option<String>,
+    version: Option<String>,
+    server_type: Option<String>,
+    java_version: Option<u8>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let manager = state.server_manager.lock().await;
+    manager
+        .update_server_meta(&server_id, name, version, server_type, java_version)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Save servers
+    let _ = manager.save_servers(&state.config_path).await;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -596,6 +638,10 @@ async fn fetch_versions(
             .fetch_paper_versions()
             .await
             .map_err(|e| e.to_string()),
+        "forge" => manager
+            .fetch_forge_versions()
+            .await
+            .map_err(|e| e.to_string()),
         "fabric" => manager
             .fetch_fabric_versions()
             .await
@@ -632,6 +678,7 @@ async fn fetch_versions(
             .fetch_bungeecord_versions()
             .await
             .map_err(|e| e.to_string()),
+        "custom" => Ok(vec!["Manual".to_string()]),
         _ => Err("Unsupported server type".to_string()),
     }
 }
@@ -760,6 +807,10 @@ pub fn run() {
     let monitor = Arc::new(Mutex::new(Monitor::new()));
     let bridge = Arc::new(PrismarineBridge::new());
 
+    let server_manager_clone = Arc::clone(&server_manager);
+    let server_manager_clone2 = Arc::clone(&server_manager);
+    let config_path_clone = config_path.clone();
+
     let app_state = AppState {
         server_manager: Arc::clone(&server_manager),
         port_manager,
@@ -768,13 +819,13 @@ pub fn run() {
         config_path: config_path.clone(),
     };
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(move |_app| {
             // Spawn background task for auto-restart monitor
-            let monitor_manager = Arc::clone(&server_manager);
+            let monitor_manager = Arc::clone(&server_manager_clone);
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
@@ -785,13 +836,15 @@ pub fn run() {
 
             // Load saved servers in setup hook (inside Tauri's async runtime)
             tauri::async_runtime::spawn(async move {
-                let manager = server_manager.lock().await;
-                let _ = manager.load_servers(&config_path).await;
+                let manager = server_manager_clone2.lock().await;
+                let _ = manager.load_servers(&config_path_clone).await;
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             create_server,
+            create_custom_server,
+            update_server_meta,
             start_server,
             stop_server,
             delete_server,
@@ -846,6 +899,22 @@ pub fn run() {
             grant_op,
             revoke_op,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            use tauri::Manager;
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                println!("[Prismarine] Shutting down. Stopping all servers...");
+                
+                // Use block_on to ensure servers are stopped before app terminates
+                let sm_handle = state.server_manager.clone();
+                tauri::async_runtime::block_on(async move {
+                    let manager = sm_handle.lock().await;
+                    let _ = manager.stop_all_servers().await;
+                });
+            }
+        }
+    });
 }

@@ -51,6 +51,8 @@ pub struct ServerInfo {
     pub time_zone: Option<String>, // e.g. "Asia/Tokyo"
     #[serde(default)]
     pub last_start_time: Option<u64>,
+    #[serde(default)]
+    pub java_version: Option<u8>,
 }
 
 fn default_restart_interval() -> u64 {
@@ -111,6 +113,7 @@ pub enum ServerType {
     BungeeCord,
     Velocity,
     Waterfall,
+    Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,10 +200,6 @@ impl ServerManager {
         // Accept EULA
         fs::write(server_path.join("eula.txt"), "eula=true").await?;
 
-        // Default min_memory to same as max for new servers, or 1G?
-        // Let's default to max_memory for simplicity/Aikar's recommendation,
-        // but user can change it. Actually user wants to decide.
-        // I'll initialize it to max_memory for now so it doesn't break.
         let min_memory = max_memory.clone();
 
         let server_info = ServerInfo {
@@ -221,10 +220,101 @@ impl ServerManager {
             restart_schedule: None,
             time_zone: None,
             last_start_time: None,
+            java_version: None,
         };
 
         self.servers.lock().await.insert(id, server_info.clone());
         Ok(server_info)
+    }
+
+    pub async fn create_custom_server(
+        &self,
+        name: String,
+        jar_path: String,
+        port: u16,
+        max_memory: String,
+    ) -> Result<ServerInfo> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let server_path = self.base_path.join(&id);
+
+        println!("[Custom Server] Creating at {:?} from {}", server_path, jar_path);
+
+        // Create server directory
+        fs::create_dir_all(&server_path)
+            .await
+            .context("Failed to create server directory")?;
+
+        // Copy original jar as server.jar
+        let target_jar = server_path.join("server.jar");
+        
+        // Handle potentially quoted or escaped paths from frontend
+        let clean_path = jar_path.trim_matches('"').trim();
+        let source_path = std::path::Path::new(clean_path);
+        
+        if source_path.exists() {
+            println!("[Custom Server] Copying {} to {:?}", clean_path, target_jar);
+            fs::copy(source_path, target_jar).await.context(format!("Failed to copy jar from {} to {:?}", clean_path, server_path))?;
+        } else {
+            println!("[Custom Server] Source JAR not found at: {}", clean_path);
+            anyhow::bail!("Source JAR not found: {}", clean_path);
+        }
+
+        // Create default server.properties
+        self.create_default_properties(&server_path, port).await?;
+
+        // Accept EULA
+        fs::write(server_path.join("eula.txt"), "eula=true").await?;
+
+        let min_memory = max_memory.clone();
+
+        let server_info = ServerInfo {
+            id: id.clone(),
+            name,
+            version: "Manual".to_string(),
+            server_type: ServerType::Custom,
+            port,
+            max_memory,
+            min_memory,
+            status: ServerStatus::Stopped,
+            path: server_path,
+            pid: None,
+            players: "0/20".to_string(),
+            auto_restart: false,
+            restart_interval: 86400,
+            restart_type: RestartType::Interval,
+            restart_schedule: None,
+            time_zone: None,
+            last_start_time: None,
+            java_version: None,
+        };
+
+        self.servers.lock().await.insert(id, server_info.clone());
+        Ok(server_info)
+    }
+
+    /// Update server name and version string
+    pub async fn update_server_meta(
+        &self,
+        server_id: &str,
+        name: Option<String>,
+        version: Option<String>,
+        server_type: Option<String>,
+        java_version: Option<u8>,
+    ) -> Result<()> {
+        let mut servers = self.servers.lock().await;
+        if let Some(server) = servers.get_mut(server_id) {
+            if let Some(n) = name { server.name = n; }
+            if let Some(v) = version { server.version = v; }
+            if let Some(j) = java_version { server.java_version = Some(j); }
+            if let Some(_t) = server_type {
+                 // Update internal type string if needed? 
+                 // Actually server_type is enum, we could map it or just update string if we had one.
+                 // For now let's just allow editing name and version.
+            }
+            Ok(())
+        } else {
+            anyhow::bail!("Server not found")
+        }
     }
 
     pub async fn set_auto_restart(
@@ -271,24 +361,28 @@ impl ServerManager {
 
         let jar_path = server_info.path.join("server.jar");
 
-        // Auto-select Java based on Minecraft version
-        let java_cmd = crate::java_detector::select_java_for_minecraft(&server_info.version)
-            .unwrap_or_else(|| {
-                // Fallback: Try JAVA_HOME, then system java
-                std::env::var("JAVA_HOME")
-                    .ok()
-                    .map(|java_home| {
-                        #[cfg(target_os = "windows")]
-                        {
-                            format!("{}\\bin\\java.exe", java_home)
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        {
-                            format!("{}/bin/java", java_home)
-                        }
-                    })
-                    .unwrap_or_else(|| "java".to_string())
-            });
+        // Auto-select Java based on Minecraft version (or override)
+        let java_cmd = if let Some(ver) = server_info.java_version {
+            crate::java_detector::select_java_by_version(ver).await
+        } else {
+            crate::java_detector::select_java_for_minecraft(&server_info.version).await
+        }
+        .unwrap_or_else(|| {
+            // Fallback: Try JAVA_HOME, then system java
+            std::env::var("JAVA_HOME")
+                .ok()
+                .map(|java_home| {
+                    #[cfg(target_os = "windows")]
+                    {
+                        format!("{}\\bin\\java.exe", java_home)
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        format!("{}/bin/java", java_home)
+                    }
+                })
+                .unwrap_or_else(|| "java".to_string())
+        });
 
         // Build JVM arguments with performance optimizations
         let mut jvm_args = vec![
@@ -330,15 +424,22 @@ impl ServerManager {
             }
         }
 
-        let child = Command::new(java_cmd)
-            .args(&jvm_args)
+        let mut cmd = Command::new(java_cmd);
+        cmd.args(&jvm_args)
             .current_dir(&server_info.path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .stdin(Stdio::piped())
-            .spawn()
+            .stdin(Stdio::piped());
+
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let child = cmd.spawn()
             .context("Failed to start server process")?;
 
+        let pid = child.id();
         self.processes
             .lock()
             .unwrap()
@@ -347,7 +448,82 @@ impl ServerManager {
         let mut servers = self.servers.lock().await;
         if let Some(server) = servers.get_mut(server_id) {
             server.status = ServerStatus::Running;
+            server.pid = pid; // Store the system PID
+            server.last_start_time = Some(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs());
         }
+
+        // --- Spawn Management Monitoring Task ---
+        let servers_mv = self.servers.clone();
+        let processes_mv = self.processes.clone();
+        let id_mv = server_id.to_string();
+
+        tokio::spawn(async move {
+            println!("[ServerManager] Started monitoring for {}", id_mv);
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+                let exit_check = {
+                    let mut p_map = processes_mv.lock().unwrap();
+                    if let Some(child) = p_map.get_mut(&id_mv) {
+                        match child.try_wait() {
+                            Ok(Some(status)) => {
+                                println!("[ServerManager] Server {} exited naturally: {:?}", id_mv, status);
+                                p_map.remove(&id_mv);
+                                Some(Ok(status))
+                            }
+                            Ok(None) => None,
+                            Err(e) => {
+                                println!("[ServerManager] Error monitoring {}: {}", id_mv, e);
+                                p_map.remove(&id_mv);
+                                Some(Err(e))
+                            }
+                        }
+                    } else {
+                        // Process removed by stop_server() or other logic
+                        break;
+                    }
+                };
+
+                if let Some(res) = exit_check {
+                    if let Ok(_status) = res {
+                        let mut s_map = servers_mv.lock().await;
+                        if let Some(server) = s_map.get_mut(&id_mv) {
+                            if server.status != ServerStatus::Stopped && server.status != ServerStatus::Stopping {
+                                server.status = ServerStatus::Stopped;
+                                server.last_start_time = None;
+                                server.pid = None; // PID is gone
+                            }
+                        }
+                    }
+                    break;
+                }
+                
+                // --- Extra PID check (if exited naturally or externally) ---
+                {
+                    let mut s_map = servers_mv.lock().await;
+                    if let Some(server) = s_map.get_mut(&id_mv) {
+                        if server.status == ServerStatus::Starting || server.status == ServerStatus::Running || server.status == ServerStatus::Stopping {
+                            if let Some(pid) = server.pid {
+                                use sysinfo::{Pid, System, ProcessesToUpdate};
+                                let mut s = System::new();
+                                // sysinfo 0.32 syntax
+                                s.refresh_processes(ProcessesToUpdate::Some(&[Pid::from(pid as usize)]), true);
+                                if s.process(Pid::from(pid as usize)).is_none() {
+                                    println!("[ServerManager] PID {} not found for server {}, forcing Stopped state", pid, id_mv);
+                                    server.status = ServerStatus::Stopped;
+                                    server.pid = None;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            println!("[ServerManager] Monitoring ended for {}", id_mv);
+        });
 
         Ok(())
     }
@@ -440,6 +616,20 @@ impl ServerManager {
             server.last_start_time = None;
         }
 
+        Ok(())
+    }
+
+    /// Stop all running servers
+    pub async fn stop_all_servers(&self) -> Result<()> {
+        let server_ids: Vec<String> = {
+            let processes = self.processes.lock().unwrap();
+            processes.keys().cloned().collect()
+        };
+
+        for id in server_ids {
+            println!("[ServerManager] Stopping {} during shutdown...", id);
+            let _ = self.stop_server(&id).await;
+        }
         Ok(())
     }
 
@@ -574,11 +764,13 @@ impl ServerManager {
                 // Spigot requires BuildTools - handle separately
                 return self.build_spigot(server_path, version).await;
             }
-            ServerType::Forge => {
-                return Err(anyhow::anyhow!(
-                    "Automatic download not supported for {:?}",
-                    server_type
-                ))
+            ServerType::Forge => self.get_forge_url(version).await?,
+            ServerType::Custom => {
+                // For custom, we just check if server.jar exists or wait for user to add it
+                if !jar_path.exists() {
+                    println!("[Custom Server] server.jar not found yet. User must provide it.");
+                }
+                return Ok(());
             }
         };
 
@@ -628,6 +820,25 @@ impl ServerManager {
             .to_string();
 
         Ok(download_url)
+    }
+
+    async fn get_forge_url(&self, version: &str) -> Result<String> {
+        let promo_url = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
+        let client = reqwest::Client::builder()
+            .user_agent("MinecraftServerManager/0.1.0")
+            .build()?;
+        let promo: serde_json::Value = client.get(promo_url).send().await?.json().await?;
+
+        let forge_version = promo["promos"][format!("{}-latest", version)]
+            .as_str()
+            .or_else(|| promo["promos"][format!("{}-recommended", version)].as_str())
+            .context(format!("No Forge version found for Minecraft {}", version))?;
+
+        // Installer URL
+        Ok(format!(
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/{}-{}/forge-{}-{}-installer.jar",
+            version, forge_version, version, forge_version
+        ))
     }
 
     async fn get_paper_url(&self, version: &str) -> Result<String> {
@@ -909,6 +1120,7 @@ impl ServerManager {
 
         // Get appropriate Java version for building
         let java_cmd = crate::java_detector::select_java_for_minecraft(version)
+            .await
             .unwrap_or_else(|| "java".to_string());
 
         println!("[Spigot BuildTools] Using Java: {}", java_cmd);
@@ -918,12 +1130,18 @@ impl ServerManager {
         );
 
         // Run BuildTools
-        let output = Command::new(&java_cmd)
-            .args(&["-jar", "BuildTools.jar", "--rev", version])
+        let mut build_cmd = Command::new(&java_cmd);
+        build_cmd.args(&["-jar", "BuildTools.jar", "--rev", version])
             .current_dir(server_path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
+            .stderr(Stdio::piped());
+
+        #[cfg(target_os = "windows")]
+        {
+            build_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let output = build_cmd.output()
             .await
             .context("Failed to run BuildTools")?;
 
@@ -958,6 +1176,39 @@ impl ServerManager {
 
         println!("[Spigot BuildTools] Spigot server ready!");
         Ok(())
+    }
+
+    pub async fn fetch_forge_versions(&self) -> Result<Vec<String>> {
+        // Fetch promotions_slim.json to get supported Minecraft versions
+        let url = "https://maven.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
+        let client = reqwest::Client::builder()
+            .user_agent("MinecraftServerManager/0.1.0 (antigravity)")
+            .build()?;
+
+        let resp: serde_json::Value = client.get(url).send().await?.json().await?;
+        let promos = resp["promos"]
+            .as_object()
+            .context("Invalid promotion metadata")?;
+
+        let mut mc_versions: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for key in promos.keys() {
+            // Keys are in format "1.20.1-latest" or "1.20.1-recommended"
+            if let Some(version) = key.strip_suffix("-latest") {
+                mc_versions.insert(version.to_string());
+            } else if let Some(version) = key.strip_suffix("-recommended") {
+                mc_versions.insert(version.to_string());
+            }
+        }
+
+        let mut sorted_versions: Vec<String> = mc_versions.into_iter().collect();
+        // Sort descending
+        sorted_versions.sort_by(|a, b| {
+            let a_parts: Vec<i32> = a.split('.').filter_map(|p| p.parse().ok()).collect();
+            let b_parts: Vec<i32> = b.split('.').filter_map(|p| p.parse().ok()).collect();
+            b_parts.cmp(&a_parts)
+        });
+
+        Ok(sorted_versions)
     }
 
     pub async fn fetch_vanilla_versions(&self) -> Result<Vec<String>> {
@@ -1638,6 +1889,7 @@ impl ServerManager {
             ServerType::Velocity => "[\"velocity\"]",
             ServerType::BungeeCord => "[\"bungeecord\"]",
             ServerType::Waterfall => "[\"bungeecord\",\"waterfall\"]",
+            ServerType::Custom => "[]",
         };
 
         let game_versions = format!("[\"{}\"]", version);
@@ -1730,6 +1982,7 @@ impl ServerManager {
             ServerType::Velocity => "[\"categories:velocity\"]",
             ServerType::BungeeCord => "[\"categories:bungeecord\"]",
             ServerType::Waterfall => "[\"categories:bungeecord\",\"categories:waterfall\"]",
+            ServerType::Custom => "[]",
         };
 
         let version_facet = format!("[\"versions:{}\"]", version);
